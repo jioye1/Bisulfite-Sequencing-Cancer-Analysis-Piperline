@@ -1,0 +1,91 @@
+#!/bin/bash
+#SBATCH --job-name=bismark_pipeline      # Job name
+#SBATCH --output=bismark_pipeline-%j.out # Output file (%j = job ID)
+#SBATCH --time=2:00:00                   # Time limit (adjust as necessary)
+#SBATCH --ntasks=1                       # Number of tasks
+#SBATCH --cpus-per-task=8                # Number of CPU cores
+#SBATCH --mem=64G                        # Memory required (adjust as necessary)
+#SBATCH --mail-user=sejacksony@gmail.com # Email notifications
+#SBATCH --mail-type=ALL                  # Send notifications at start, end, and on failure
+#SBATCH --account=def-jch                # Use your Compute Canada account
+#SBATCH --chdir="/scratch/jacksony/Data Analysis Cedar/"  # Working directory
+
+# Load necessary modules
+module load bismark               # Adjust version based on your system
+module load bowtie2               # Ensure Bowtie2 is loaded as required by Bismark
+
+# Define directories
+FASTQ_DIR="/scratch/jacksony/fastq_files_test"       # Directory with FastQ files
+GENOME_DIR="/scratch/jacksony/CHM13_Bismark_Genome"  # Genome directory
+ALIGN_DIR="/scratch/jacksony/bismark_output/aligned"  # Directory for alignment output
+DEDUP_DIR="/scratch/jacksony/bismark_output/deduplicated" # Directory for deduplication output
+METH_DIR="/scratch/jacksony/bismark_output/methylation"   # Directory for methylation output
+HTML_DIR="/scratch/jacksony/bismark_output/html_files"    # Directory for HTML reports
+
+# Ensure directories exist
+mkdir -p $ALIGN_DIR $DEDUP_DIR $METH_DIR $HTML_DIR
+
+# Loop through all FastQ files in the FastQ directory for alignment
+for R1 in $FASTQ_DIR/*_1.fastq; do
+    # Check if R1 and R2 files exist
+    if [ -f "$R1" ]; then
+        R2="${R1/_1.fastq/_2.fastq}"
+        if [ -f "$R2" ]; then
+            BASENAME=$(basename $R1 "_1.fastq")
+
+            # Step 1: Bismark alignment (using 8 cores and score_min L,0,-0.6)
+            echo "Aligning $BASENAME with Bismark..."
+            bismark --genome $GENOME_DIR \
+                    -1 $R1 -2 $R2 \
+                    --bowtie2 --multicore 8 \
+                    --score_min L,0,-0.6 \
+                    --maxins 1000 \
+                    -o $ALIGN_DIR
+
+            # Check if alignment succeeded
+            BAM_FILE="$ALIGN_DIR/${BASENAME}_1_bismark_bt2_pe.bam"
+            if [ ! -f "$BAM_FILE" ]; then
+                echo "Error: Alignment file for $BASENAME not found, skipping further steps for this file."
+                continue
+            fi
+
+            # Step 2: Deduplication
+            echo "Deduplicating $BAM_FILE..."
+            deduplicate_bismark --bam $BAM_FILE --paired --output_dir $DEDUP_DIR
+
+            # Check if deduplication succeeded
+            DEDUP_BAM="$DEDUP_DIR/${BASENAME}_1_bismark_bt2_pe.deduplicated.bam"
+            if [ ! -f "$DEDUP_BAM" ]; then
+                echo "Error: Deduplicated file for $BASENAME not found, skipping further steps for this file."
+                continue
+            fi
+
+            # Step 3: Methylation extraction
+            METH_SUBDIR="$METH_DIR/${BASENAME}_1"
+            mkdir -p $METH_SUBDIR
+            echo "Extracting methylation data from $DEDUP_BAM..."
+            bismark_methylation_extractor --bedGraph --gzip --multicore 8 --paired --output $METH_SUBDIR $DEDUP_BAM
+
+            # Step 4: HTML report generation
+            echo "Generating Bismark HTML report for $BASENAME..."
+            bismark2report --alignment_report $ALIGN_DIR/${BASENAME}_1_bismark_bt2_PE_report.txt \
+                           --dedup_report $DEDUP_DIR/${BASENAME}_1_bismark_bt2_pe.deduplication_report.txt \
+                           --splitting_report $METH_SUBDIR/${BASENAME}_1_bismark_bt2_pe.deduplicated_splitting_report.txt \
+                           --mbias_report $METH_SUBDIR/${BASENAME}_1_bismark_bt2_pe.deduplicated.M-bias.txt \
+                           --dir $METH_SUBDIR
+
+            # Move the generated HTML report to the html_files folder
+            echo "Moving HTML report to the html_files directory..."
+            mv $METH_SUBDIR/${BASENAME}_1_bismark_bt2_PE_report.html $HTML_DIR/
+
+            echo "Completed processing $BASENAME."
+        else
+            echo "Error: Paired-end file $R2 not found, skipping this pair."
+        fi
+    else
+        echo "Error: File $R1 not found, skipping."
+    fi
+done
+
+echo "Bismark pipeline complete."
+
