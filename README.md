@@ -43,13 +43,13 @@ step4_methylation_to_csv/ # methylation_to_csv_.sh scripts
 
 ---
 
-## 🚀 Quickstart (SLURM)
+##🚀 Quickstart (SLURM)
 
-### 0) Configure
+##0) Configure
 - Edit paths inside scripts to match your `$SCRATCH`/work dir.
 - Add accessions (one per line) to `srr_list.txt`.
 
-### 1) Download SRA
+###1) Download SRA
 ```bash
 sbatch step1_sra_batch_download.sh
 Outputs: sra_files/*.sra
